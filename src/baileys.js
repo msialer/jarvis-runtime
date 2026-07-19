@@ -15,6 +15,16 @@ import path from "path";
 
 export const DOWNLOADS_DIR = "/home/ubuntu/projects/jarvis/data/downloads/whatsapp";
 const MAX_ATTACHMENT_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
+const DOWNLOAD_TIMEOUT_MS = 30000; // 30 seconds
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms)
+    ),
+  ]);
+}
 
 const ALLOWED_MIMETYPES = new Set([
   // Images
@@ -150,11 +160,11 @@ async function saveAttachment(sock, msg, logger) {
     filename = `${path.basename(filename, originalExt)}${expectedExt}`;
   }
 
-  const buffer = await downloadMediaMessage(
-    msg,
-    "buffer",
-    {},
-    { logger, reuploadRequest: sock.updateMediaMessage }
+  console.log(`Starting download for ${contentType} (${mimetype}, ${fileSize} bytes)`);
+  const buffer = await withTimeout(
+    downloadMediaMessage(msg, "buffer", {}, { logger, reuploadRequest: sock.updateMediaMessage }),
+    DOWNLOAD_TIMEOUT_MS,
+    `downloadMediaMessage(${contentType})`
   );
 
   if (!buffer || buffer.length === 0) {
@@ -296,8 +306,12 @@ export async function startBaileys(onMessage, options = {}) {
   });
 
   sock.ev.on("messages.upsert", async (m) => {
+    console.log(`messages.upsert: ${m.messages?.length ?? 0} message(s), type=${m.type || "unknown"}`);
     for (const msg of m.messages) {
-      if (msg.key.fromMe) continue;
+      if (msg.key.fromMe) {
+        console.log("Skipping own message");
+        continue;
+      }
 
       const chatJid = msg.key.remoteJid;
       const isGroup = chatJid?.endsWith("@g.us");
@@ -310,6 +324,11 @@ export async function startBaileys(onMessage, options = {}) {
       const canonicalAuthorJid = authorAltJid || authorJid;
 
       const contentType = getContentType(msg.message);
+      const messageKeys = msg.message ? Object.keys(msg.message) : [];
+      console.log(
+        `Incoming msg chat=${chatJid} author=${authorJid} alt=${authorAltJid} canonical=${canonicalAuthorJid} contentType=${contentType} keys=${messageKeys.join(",")}`
+      );
+
       const hasMedia =
         contentType === "imageMessage" ||
         contentType === "videoMessage" ||
@@ -325,8 +344,14 @@ export async function startBaileys(onMessage, options = {}) {
         msg.message?.documentMessage?.caption ||
         "";
 
-      if (!canonicalAuthorJid) continue;
-      if (!text && !hasMedia) continue;
+      if (!canonicalAuthorJid) {
+        console.log("Skipping message without canonical author");
+        continue;
+      }
+      if (!text && !hasMedia) {
+        console.log(`Skipping message with no text/media (contentType=${contentType})`);
+        continue;
+      }
 
       const isOwner = CONFIG.whatsapp.ownerNumbers.includes(canonicalAuthorJid) ||
         CONFIG.whatsapp.ownerNumbers.includes(authorJid);
@@ -335,6 +360,8 @@ export async function startBaileys(onMessage, options = {}) {
         CONFIG.whatsapp.whitelist.includes(chatJid) ||
         CONFIG.whatsapp.whitelist.includes(canonicalAuthorJid) ||
         CONFIG.whatsapp.whitelist.includes(authorJid);
+
+      console.log(`Auth check: isOwner=${isOwner} isWhitelisted=${isWhitelisted}`);
 
       if (!isOwner && !isWhitelisted) {
         console.log(

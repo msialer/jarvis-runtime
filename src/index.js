@@ -13,6 +13,21 @@ import {
 import { logTurn, logError } from "./audit-logger.js";
 import { searchMemPalace, addToMemPalace, mineConversations } from "./tools/mempalace.js";
 import {
+  initLcmDb,
+  getDb,
+  appendTurn,
+  buildContext as buildLcmContext,
+  getUnsummarizedMessageRange,
+  getLeafSummariesReadyForCondensing,
+  createSummary,
+  getMessageRange,
+  searchMessages,
+  FRESH_TAIL_COUNT,
+  LEAF_MIN_MESSAGES,
+  CONDENSE_MIN_LEAVES,
+} from "./lcm.js";
+import { summarizeLeaf, summarizeCondensed } from "./lcm-summarizer.js";
+import {
   askKimi,
   summarizeConversation,
   buildToolResultPrompt,
@@ -179,12 +194,14 @@ async function runSkillForOwner(to, skillName, header) {
   const session = await getSession(to, activeProject);
   const palace = await searchMemPalace(skillName, 3);
   const availableProjects = await listProjects();
+  const lcmContext = buildLcmContext(to, activeProject);
 
   const response = await askKimi(`/skill:${skillName}`, {
     projectDir,
     project: activeProject,
     availableProjects,
     summary: session.summary,
+    lcmContext,
     sender: to,
     isOwner: true,
     memPalaceResults: palace.results || [],
@@ -208,12 +225,14 @@ async function runInboxCheck(to) {
   const session = await getSession(to, activeProject);
   const palace = await searchMemPalace("inbox-check", 3);
   const availableProjects = await listProjects();
+  const lcmContext = buildLcmContext(to, activeProject);
 
   const response = await askKimi(`/skill:inbox-check`, {
     projectDir,
     project: activeProject,
     availableProjects,
     summary: session.summary,
+    lcmContext,
     sender: to,
     isOwner: true,
     memPalaceResults: palace.results || [],
@@ -237,42 +256,63 @@ async function runFollowUpCheck(to) {
   await runSkillForOwner(to, "follow-up-check", "Follow-ups");
 }
 
-async function readRecentHistory(chatJid, projectKey, limit = 20) {
+async function maintainLcm(chatJid, projectKey) {
   try {
-    const data = await readFile(CONVERSATION_LOG, "utf8");
-    const lines = data.trim().split("\n").filter(Boolean);
-    const entries = lines
-      .map((l) => {
-        try {
-          return JSON.parse(l);
-        } catch {
-          return null;
-        }
-      })
-      .filter((e) => e && e.sender === chatJid && e.project === projectKey)
-      .slice(-limit);
+    const conversationId = buildLcmContext(chatJid, projectKey).conversationId;
+    if (!conversationId) return;
 
-    return entries
-      .map((e) => `Q: ${e.incoming}\nA: ${e.outgoing}`)
-      .join("\n---\n");
+    // 1. Create leaf summaries for unsummarized messages outside the fresh tail.
+    let range = getUnsummarizedMessageRange(conversationId);
+    while (range && range.count >= LEAF_MIN_MESSAGES) {
+      const messages = getMessageRange(chatJid, projectKey, range.startIndex, range.endIndex);
+      const summaryText = await summarizeLeaf(messages);
+      if (!summaryText) break;
+
+      createSummary({
+        conversationId,
+        depth: 0,
+        content: summaryText,
+        startTurnIndex: range.startIndex,
+        endTurnIndex: range.endIndex,
+      });
+      console.log(
+        `LCM leaf summary created for ${chatJid}/${projectKey} (turns ${range.startIndex}-${range.endIndex})`
+      );
+
+      range = getUnsummarizedMessageRange(conversationId);
+    }
+
+    // 2. Condense consecutive leaf summaries.
+    let leaves = getLeafSummariesReadyForCondensing(conversationId);
+    while (leaves.length >= CONDENSE_MIN_LEAVES) {
+      const condensedText = await summarizeCondensed(leaves);
+      if (!condensedText) break;
+
+      const startTurnIndex = Math.min(...leaves.map((s) => s.startTurnIndex));
+      const endTurnIndex = Math.max(...leaves.map((s) => s.endTurnIndex));
+      createSummary({
+        conversationId,
+        depth: 1,
+        content: condensedText,
+        startTurnIndex,
+        endTurnIndex,
+        childSummaryIds: leaves.map((s) => s.id),
+      });
+      console.log(
+        `LCM condensed summary created for ${chatJid}/${projectKey} (turns ${startTurnIndex}-${endTurnIndex})`
+      );
+
+      leaves = getLeafSummariesReadyForCondensing(conversationId);
+    }
   } catch (err) {
-    if (err.code === "ENOENT") return "";
-    throw err;
+    console.error("LCM maintenance failed:", err);
   }
 }
 
+// Legacy compact/read functions kept as thin fallbacks.
 async function maybeCompact(chatJid, projectKey) {
-  if (!(await shouldCompact(chatJid, projectKey))) return;
-
-  console.log(`Compacting session for ${chatJid}/${projectKey}`);
-  const historyText = await readRecentHistory(chatJid, projectKey, 20);
-  if (!historyText) return;
-
-  const summary = await summarizeConversation(historyText);
-  if (summary) {
-    await applyCompaction(chatJid, projectKey, summary);
-    console.log(`Compaction summary: ${summary.slice(0, 200)}...`);
-  }
+  // LCM maintenance runs after each turn; legacy compact is no longer needed.
+  return maintainLcm(chatJid, projectKey);
 }
 
 async function handleProjectCommand(sender, args) {
@@ -1091,6 +1131,14 @@ async function recordOutgoing(to, text, projectKey) {
     outgoing: text,
     project,
   });
+  appendTurn({
+    chatJid: to,
+    project,
+    role: "assistant",
+    content: text,
+    authorJid: null,
+    timestamp: new Date().toISOString(),
+  });
   const state = await getConversationState(to);
   const nextState = inferStateFromOutgoing(text, state);
   await updateConversationState(to, nextState);
@@ -1178,17 +1226,28 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
     // Non-fatal: typing indicator may fail in some chat types.
   }
 
-  await maybeCompact(sender, activeProject);
-
-  const session = await getSession(sender, activeProject);
-  const summary = await getSummary(sender, activeProject);
-  const recentMessages = await getRecentMessages(sender, MAX_THREAD_MESSAGES_IN_PROMPT);
   const conversationState = await getConversationState(sender);
 
   // Transcribe audio or extract archives before building the prompt.
   if (attachment) {
     attachment = await processAttachment(attachment);
   }
+
+  // Persist incoming user turn in LCM.
+  appendTurn({
+    chatJid: sender,
+    project: activeProject,
+    role: "user",
+    content: attachment ? `[archivo adjunto: ${attachment.filename}]${text ? " " + text : ""}` : text,
+    authorJid: author,
+    timestamp,
+  });
+
+  const lcmContext = buildLcmContext(sender, activeProject);
+
+  const session = await getSession(sender, activeProject);
+  const summary = await getSummary(sender, activeProject);
+  const recentMessages = await getRecentMessages(sender, MAX_THREAD_MESSAGES_IN_PROMPT);
 
   // Proactive context retrieval.
   const proactiveContext = await searchContextProactively(text, conversationState);
@@ -1207,6 +1266,7 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
     project: activeProject,
     availableProjects,
     summary,
+    lcmContext,
     sender: author,
     chat: sender,
     isOwner,
@@ -1392,6 +1452,16 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
   await bumpMessageCount(sender, activeProject);
   await sendReply(sender, reply);
 
+  // Persist assistant turn in LCM.
+  appendTurn({
+    chatJid: sender,
+    project: activeProject,
+    role: "assistant",
+    content: reply,
+    authorJid: null,
+    timestamp: new Date().toISOString(),
+  });
+
   try {
     await sock.sendPresenceUpdate("available", sender);
   } catch (err) {
@@ -1456,6 +1526,11 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
   // Index the conversation into MemPalace in the background.
   mineConversations().catch((err) => {
     console.error("Failed to mine conversations:", err);
+  });
+
+  // Run LCM compaction in the background.
+  maintainLcm(sender, activeProject).catch((err) => {
+    console.error("LCM maintenance failed:", err);
   });
 }
 
@@ -1712,6 +1787,9 @@ async function main() {
       "⚠️  CONFIG.whatsapp.ownerNumbers esta vacio. Edita src/config.js y agrega tu numero en formato 51999999999@s.whatsapp.net antes de que el bot te reconozca como owner."
     );
   }
+
+  await initLcmDb();
+  console.log("LCM inicializado en /home/ubuntu/projects/jarvis/data/jarvis-lcm.db");
 
   const projects = await listProjects();
   console.log("Projects disponibles:", projects.join(", "));

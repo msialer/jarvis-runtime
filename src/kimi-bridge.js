@@ -159,13 +159,37 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
     parts.push(`Switch projects with: /project <name>. Create a new one with: /project create <name> [description]`);
   }
 
-  if (context.summary) {
-    parts.push("\n--- Resumen de la conversación anterior ---");
-    parts.push(
-      typeof context.summary === "string"
-        ? context.summary.slice(0, 800)
-        : context.summary
-    );
+  if (context.lcmContext) {
+    parts.push(...renderLcmContext(context.lcmContext));
+  } else {
+    // Legacy fallback: old summary + recent messages.
+    if (context.summary) {
+      parts.push("\n--- Resumen de la conversación anterior ---");
+      parts.push(
+        typeof context.summary === "string"
+          ? context.summary.slice(0, 800)
+          : context.summary
+      );
+    }
+
+    if (context.recentMessages && context.recentMessages.length > 0) {
+      const formatted = context.recentMessages
+        .slice(-5)
+        .map((m) => {
+          const ts = m.timestamp ? new Date(m.timestamp).toISOString().slice(11, 16) : "";
+          const incoming = (m.incoming || "").slice(0, 300);
+          const outgoing = (m.outgoing || "").slice(0, 300);
+          const lines = [];
+          if (incoming) lines.push(`[${ts}] Mauricio: ${incoming}`);
+          if (outgoing) lines.push(`[${ts}] Kimi: ${outgoing}`);
+          return lines.join("\n");
+        })
+        .join("\n");
+      if (formatted.trim()) {
+        parts.push("\n--- Hilo reciente ---");
+        parts.push(formatted);
+      }
+    }
   }
 
   if (context.conversationState) {
@@ -182,25 +206,6 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
     if (csLines.length > 0) {
       parts.push("\n--- Estado de la conversación ---");
       parts.push(csLines.join("\n"));
-    }
-  }
-
-  if (context.recentMessages && context.recentMessages.length > 0) {
-    const formatted = context.recentMessages
-      .slice(-5)
-      .map((m) => {
-        const ts = m.timestamp ? new Date(m.timestamp).toISOString().slice(11, 16) : "";
-        const incoming = (m.incoming || "").slice(0, 300);
-        const outgoing = (m.outgoing || "").slice(0, 300);
-        const lines = [];
-        if (incoming) lines.push(`[${ts}] Mauricio: ${incoming}`);
-        if (outgoing) lines.push(`[${ts}] Kimi: ${outgoing}`);
-        return lines.join("\n");
-      })
-      .join("\n");
-    if (formatted.trim()) {
-      parts.push("\n--- Hilo reciente ---");
-      parts.push(formatted);
     }
   }
 
@@ -286,6 +291,40 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
   parts.push(userPrompt);
 
   return parts.join("\n");
+}
+
+function renderLcmContext(lcmContext) {
+  const parts = [];
+  if (!lcmContext) return parts;
+
+  const { summaries, freshTail, messageCount } = lcmContext;
+
+  if (summaries && summaries.length > 0) {
+    parts.push("\n--- Resumen de la conversación anterior ---");
+    for (const summary of summaries) {
+      const label = summary.depth > 0 ? "Resumen condensado" : "Resumen parcial";
+      parts.push(
+        `${label} (turnos ${summary.startTurnIndex}-${summary.endTurnIndex}):\n${summary.content.slice(0, 1200)}`
+      );
+    }
+    parts.push(`(Total de mensajes en conversación: ${messageCount || "?"})`);
+  }
+
+  if (freshTail && freshTail.length > 0) {
+    const formatted = freshTail
+      .map((m) => {
+        const ts = m.timestamp ? new Date(m.timestamp).toISOString().slice(11, 16) : "";
+        const roleLabel = m.role === "user" ? "Mauricio" : "Kimi";
+        return `[${ts}] ${roleLabel}: ${(m.content || "").slice(0, 500)}`;
+      })
+      .join("\n");
+    if (formatted.trim()) {
+      parts.push("\n--- Hilo reciente ---");
+      parts.push(formatted);
+    }
+  }
+
+  return parts;
 }
 
 export async function summarizeConversation(historyText) {

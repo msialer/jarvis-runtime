@@ -62,7 +62,12 @@ function getProjectState(chatState, projectKey) {
       lastActivity: null,
       messageCount: 0,
       summary: "",
+      lcmConversationId: null,
     };
+  }
+  // Backfill for project states created before LCM.
+  if (chatState.projects[projectKey].lcmConversationId === undefined) {
+    chatState.projects[projectKey].lcmConversationId = null;
   }
   return chatState.projects[projectKey];
 }

@@ -11,7 +11,8 @@ import {
   formatPoliciesList,
 } from "./policy-manager.js";
 import { logTurn, logError } from "./audit-logger.js";
-import { searchMemPalace, addToMemPalace, mineConversations } from "./tools/mempalace.js";
+import { searchMemPalace } from "./tools/mempalace.js";
+import { checkpointTurn, fetchMemoryContext } from "./memory-checkpoint.js";
 import {
   initLcmDb,
   getDb,
@@ -46,6 +47,13 @@ import { executeTool } from "./tool-executor.js";
 import { listMetrics } from "./tools/metrics.js";
 import { startScheduler, listEvents, addEvent, cancelEvent } from "./scheduler.js";
 import { CONFIG } from "./config.js";
+import { readHandoff, writeHandoff, clearHandoff } from "./handoff.js";
+import { generateDailyLog, shouldGenerateDailyLog } from "./daily-log.js";
+import {
+  proposeUserModelUpdate,
+  formatUserModelProposal,
+  applyUserModelUpdate,
+} from "./user-model.js";
 import {
   getActiveProject,
   setActiveProject,
@@ -53,6 +61,9 @@ import {
   updateSession,
   resetSession,
   bumpMessageCount,
+  bumpOwnerTurnCount,
+  getOwnerTurnCount,
+  resetOwnerTurnCount,
   shouldCompact,
   applyCompaction,
   getSummary,
@@ -76,6 +87,7 @@ let sock = null;
 let lastMorningBriefDate = null;
 let lastInboxCheckAt = null; // { date: Lima date string, hour: number }
 let lastFollowUpCheckDate = null;
+let lastDailyLogDate = null;
 
 async function logConversation(entry) {
   await mkdir(path.dirname(CONVERSATION_LOG), { recursive: true });
@@ -567,6 +579,143 @@ function skillPrompt(text) {
   return skillArgs ? `/skill:${lowerCmd} ${skillArgs}` : `/skill:${lowerCmd}`;
 }
 
+async function handleHandoffCommand(sender, args) {
+  const subcmd = args[0]?.toLowerCase();
+  if (subcmd === "clear") {
+    await clearHandoff();
+    await sendReply(sender, "Handoff limpiado.");
+    return true;
+  }
+
+  const activeProject = await getActiveProject(sender);
+  const note = args.join(" ").trim();
+
+  // Ask Kimi to structure the handoff from the recent conversation context.
+  const recentMessages = await getRecentMessages(sender, 10);
+  const conversationText = recentMessages
+    .map((m) => {
+      const who = m.incoming ? "Mauricio" : "Kimi";
+      const msg = m.incoming || m.outgoing || "";
+      return `${who}: ${msg}`;
+    })
+    .join("\n");
+
+  const prompt = [
+    "Eres JARVIS, el EA/CoS de Mauricio. Vas a guardar un handoff de estado para retomar después.",
+    "Extrae del siguiente hilo reciente:",
+    "- objective: el objetivo actual en una oración",
+    "- progress: qué se acordó/decidió/avanzó",
+    "- blockers: qué falta o qué bloquea continuar",
+    "- next_steps: lista de 1-5 pasos concretos",
+    "",
+    "Responde SOLO con un JSON válido con esta forma:",
+    '{"objective":"...","progress":"...","blockers":"...","next_steps":["...","..."]}',
+    "",
+    note ? `Nota adicional del usuario: ${note}` : "",
+    "Hilo reciente:",
+    conversationText.slice(0, 3000),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const response = await askKimi(prompt, {
+    projectDir: CONFIG.kimi.projectDir,
+    project: activeProject,
+  });
+
+  let parsed = { objective: note, progress: "", blockers: "", next_steps: [] };
+  try {
+    const answer = response.answer || "";
+    const jsonMatch = answer.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      parsed = JSON.parse(jsonMatch[0]);
+    }
+  } catch (err) {
+    console.error("Failed to parse handoff JSON:", err, response.answer);
+  }
+
+  await writeHandoff({
+    activeProject,
+    objective: parsed.objective || note,
+    progress: parsed.progress || "",
+    blockers: parsed.blockers || "",
+    nextSteps: parsed.next_steps || [],
+  });
+
+  await sendReply(
+    sender,
+    [
+      "Handoff guardado.",
+      `Project: ${formatProjectName(activeProject)}`,
+      `Objetivo: ${parsed.objective || note || "(no definido)"}`,
+      `Próximos pasos:`,
+      ...((parsed.next_steps || []).map((s) => `- ${s}`).slice(0, 5) || ["- (ninguno)"]),
+    ].join("\n")
+  );
+  return true;
+}
+
+let pendingUserModelProposal = null;
+
+async function handleApproveUserModelCommand(sender, args) {
+  if (!pendingUserModelProposal || pendingUserModelProposal.propose.length === 0) {
+    await sendReply(sender, "No hay propuesta de perfil de usuario pendiente.");
+    return true;
+  }
+
+  const indices = args.length > 0
+    ? args.map((a) => parseInt(a, 10) - 1).filter((n) => !isNaN(n) && n >= 0)
+    : pendingUserModelProposal.propose.map((_, i) => i);
+
+  const toApply = pendingUserModelProposal.propose.filter((_, i) => indices.includes(i));
+  const applied = [];
+  for (const update of toApply) {
+    try {
+      await applyUserModelUpdate(update);
+      applied.push(update.fact);
+    } catch (err) {
+      console.error("Failed to apply user model update:", err);
+    }
+  }
+
+  pendingUserModelProposal = null;
+  await sendReply(
+    sender,
+    applied.length > 0
+      ? `Perfil actualizado con:\n${applied.map((f) => `- ${f}`).join("\n")}`
+      : "No se aplicó ninguna actualización."
+  );
+  return true;
+}
+
+async function maybeProposeUserModelUpdate(sender, activeProject) {
+  if (!CONFIG.userModel.enabled) return;
+  const count = await getOwnerTurnCount(sender);
+  if (count < CONFIG.userModel.turnThreshold) return;
+
+  try {
+    const proposal = await proposeUserModelUpdate(sender, activeProject);
+    if (proposal.skipped) {
+      await resetOwnerTurnCount(sender);
+      return;
+    }
+
+    for (const update of proposal.autoApply) {
+      await applyUserModelUpdate(update);
+    }
+
+    const message = formatUserModelProposal(proposal);
+    if (message) {
+      pendingUserModelProposal = proposal;
+      await sendReply(sender, message);
+    }
+
+    await resetOwnerTurnCount(sender);
+  } catch (err) {
+    console.error("User model update proposal failed:", err);
+  }
+}
+
 async function handleCommand({ sender, text }) {
   const [cmd, ...args] = text.slice(1).trim().split(/\s+/);
   switch (cmd.toLowerCase()) {
@@ -600,6 +749,8 @@ async function handleCommand({ sender, text }) {
     }
     case "archive":
       return await handleArchiveCommand(sender, args);
+    case "handoff":
+      return await handleHandoffCommand(sender, args);
     case "policies": {
       const policies = await listPolicies();
       await sendReply(sender, formatPoliciesList(policies));
@@ -648,6 +799,8 @@ async function handleCommand({ sender, text }) {
       return await handleApprovalCommand(sender, args[0], true);
     case "deny":
       return await handleApprovalCommand(sender, args[0], false);
+    case "approve-user-model":
+      return await handleApproveUserModelCommand(sender, args);
     default:
       return false;
   }
@@ -1261,6 +1414,8 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
 
   const palace = await searchMemPalace(text, 3);
   const availableProjects = await listProjects();
+  const handoff = await readHandoff();
+  const memoryContext = await fetchMemoryContext(text, activeProject);
   const context = {
     projectDir,
     project: activeProject,
@@ -1277,6 +1432,8 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
     conversationState,
     originalPrompt: text,
     attachment,
+    handoff,
+    memoryContext,
   };
 
   let reply = null;
@@ -1452,6 +1609,11 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
   await bumpMessageCount(sender, activeProject);
   await sendReply(sender, reply);
 
+  if (isOwner) {
+    await bumpOwnerTurnCount(sender);
+    await maybeProposeUserModelUpdate(sender, activeProject);
+  }
+
   // Persist assistant turn in LCM.
   appendTurn({
     chatJid: sender,
@@ -1486,11 +1648,18 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
   }
   await updateConversationState(sender, nextState);
 
-  await addToMemPalace(
-    `Q: ${text}\nA: ${reply}`,
-    isGroup ? `${sender} / ${author}` : sender,
-    isOwner ? "owner" : "contacts"
-  );
+  // Persist turn to MemPalace (conversation drawer + agent diary entry).
+  checkpointTurn({
+    chatJid: sender,
+    project: activeProject,
+    incoming: attachment
+      ? `[archivo adjunto: ${attachment.filename}]${text ? " " + text : ""}`
+      : text,
+    outgoing: reply,
+    timestamp,
+  }).catch((err) => {
+    console.error("Checkpoint turn failed:", err);
+  });
 
   await logConversation({
     timestamp,
@@ -1521,11 +1690,6 @@ async function handleMessage({ sender, author, text, isOwner, isGroup, msg, atta
     durationMs: Date.now() - turnStart,
   }).catch((err) => {
     console.error("Audit logging failed:", err);
-  });
-
-  // Index the conversation into MemPalace in the background.
-  mineConversations().catch((err) => {
-    console.error("Failed to mine conversations:", err);
   });
 
   // Run LCM compaction in the background.
@@ -1647,6 +1811,26 @@ async function proactiveLoop() {
         }
       }
       lastFollowUpCheckDate = todayStr;
+    }
+
+    // Daily log at configured time (default 23:30).
+    if (
+      CONFIG.dailyLog.enabled &&
+      currentHour === CONFIG.dailyLog.hour &&
+      currentMinute === CONFIG.dailyLog.minute &&
+      lastDailyLogDate !== todayStr
+    ) {
+      try {
+        const log = await generateDailyLog();
+        if (homeGroup) {
+          const msg = `Daily log generado: ${log.events} eventos, ${log.emails} correos, ${log.tasks} tareas.\nArchivo: ${log.filePath}`;
+          await sendReply(homeGroup, msg);
+          await recordOutgoing(homeGroup, msg, "default");
+        }
+      } catch (err) {
+        console.error("Daily log generation failed:", err);
+      }
+      lastDailyLogDate = todayStr;
     }
   }
 }

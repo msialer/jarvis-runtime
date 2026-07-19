@@ -53,6 +53,9 @@ function getChatState(chatJid) {
       lastIntent: "",
     };
   }
+  if (state.chats[chatJid].ownerTurnCount === undefined) {
+    state.chats[chatJid].ownerTurnCount = 0;
+  }
   return state.chats[chatJid];
 }
 
@@ -121,6 +124,25 @@ export async function bumpMessageCount(chatJid, projectKey) {
   projectState.lastActivity = new Date().toISOString();
   await saveState();
   return projectState.messageCount;
+}
+
+export async function bumpOwnerTurnCount(chatJid) {
+  await loadState();
+  const chatState = getChatState(chatJid);
+  chatState.ownerTurnCount = (chatState.ownerTurnCount || 0) + 1;
+  await saveState();
+  return chatState.ownerTurnCount;
+}
+
+export async function getOwnerTurnCount(chatJid) {
+  await loadState();
+  return getChatState(chatJid).ownerTurnCount || 0;
+}
+
+export async function resetOwnerTurnCount(chatJid) {
+  await loadState();
+  getChatState(chatJid).ownerTurnCount = 0;
+  await saveState();
 }
 
 export async function shouldCompact(chatJid, projectKey) {

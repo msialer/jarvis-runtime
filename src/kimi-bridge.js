@@ -4,6 +4,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { CONFIG } from "./config.js";
 import { loadAllPolicies } from "./policy-manager.js";
+import { formatHandoffForPrompt } from "./handoff.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -192,6 +193,10 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
     }
   }
 
+  if (context.handoff) {
+    parts.push(...formatHandoffForPrompt(context.handoff));
+  }
+
   if (context.conversationState) {
     const cs = context.conversationState;
     const csLines = [];
@@ -220,6 +225,32 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
   // Channel-agnostic capability reminder. WhatsApp is the primary interface
   // and must not restrict tool usage.
   parts.push("You can execute MCP tools (gmail_search, calendar_list, etc.) from any channel, including WhatsApp. Do not refuse to use tools just because the message arrived via WhatsApp.");
+
+  if (context.memoryContext) {
+    const mc = context.memoryContext;
+    if (mc.kgFacts && mc.kgFacts.length > 0) {
+      parts.push("\n--- Hechos conocidos (MemPalace KG) ---");
+      for (const f of mc.kgFacts.slice(0, 5)) {
+        parts.push(`- ${f.subject} → ${f.predicate} → ${f.object}`);
+      }
+    }
+
+    if (mc.diaryEntries && mc.diaryEntries.length > 0) {
+      parts.push("\n--- Diario reciente del agente ---");
+      for (const e of mc.diaryEntries.slice(0, 5)) {
+        parts.push(`- ${e.topic || "general"}: ${(e.entry || e.content || "").slice(0, 200)}`);
+      }
+    }
+
+    if (mc.semanticResults && mc.semanticResults.length > 0) {
+      parts.push("\n--- Contexto semántico reciente ---");
+      for (const r of mc.semanticResults.slice(0, 3)) {
+        parts.push(`Source: ${r.source_file || r.source_path || "unknown"}`);
+        parts.push(typeof r.text === "string" ? r.text.slice(0, 300) : r.text);
+        parts.push("");
+      }
+    }
+  }
 
   if (context.memPalaceResults && context.memPalaceResults.length > 0) {
     parts.push("\n--- Relevant context from memory ---");

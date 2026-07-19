@@ -1,0 +1,165 @@
+policies:
+  # === Herramientas nativas de Kimi Code CLI ===
+  - tool: bash
+    default: ask
+    allowlist:
+      - "^/home/ubuntu/projects/jarvis/tools/"
+      - "^/home/ubuntu/projects/jarvis/scripts/"
+    denylist:
+      - "rm\\s+-rf"
+      - "sudo\\b"
+      - ">\\s*/dev/"
+      - "&&\\s*rm"
+      - "\\|\\s*rm"
+      - "curl\\b.*\\|\\s*sh"
+      - "wget\\b.*\\|\\s*sh"
+
+  - tool: read
+    default: auto
+    restrict_paths:
+      - "/home/ubuntu/projects/jarvis/**"
+      - "/home/ubuntu/projects/server/**"
+      - "/home/ubuntu/obsidian-vault/**"
+      - "/tmp/**"
+
+  - tool: write
+    default: auto
+    restrict_paths:
+      - "/home/ubuntu/projects/jarvis/data/**"
+      - "/home/ubuntu/projects/jarvis/projects/**"
+      - "/home/ubuntu/projects/jarvis/vault/**"
+      - "/home/ubuntu/projects/jarvis/tools/**"
+      - "/home/ubuntu/projects/jarvis/.kimi-code/skills/**"
+      - "/tmp/**"
+
+  - tool: edit
+    default: auto
+    restrict_paths:
+      - "/home/ubuntu/projects/jarvis/data/**"
+      - "/home/ubuntu/projects/jarvis/projects/**"
+      - "/home/ubuntu/projects/jarvis/vault/**"
+      - "/home/ubuntu/projects/jarvis/tools/**"
+      - "/home/ubuntu/projects/jarvis/.kimi-code/skills/**"
+
+  - tool: web_search
+    default: auto
+
+  # === MCP servers ===
+  # Gmail
+  - tool: gmail_send
+    default: ask
+  - tool: mcp__gmail__gmail_send
+    default: ask
+
+  - tool: gmail_draft
+    default: auto
+  - tool: mcp__gmail__gmail_draft
+    default: auto
+
+  - tool: gmail_search
+    default: auto
+  - tool: mcp__gmail__gmail_search
+    default: auto
+
+  - tool: gmail_read
+    default: auto
+  - tool: mcp__gmail__gmail_read
+    default: auto
+
+  # Calendar
+  - tool: calendar_create
+    default: ask
+  - tool: mcp__calendar__calendar_create
+    default: ask
+
+  - tool: calendar_delete
+    default: ask
+  - tool: mcp__calendar__calendar_delete
+    default: ask
+
+  - tool: calendar_create_draft
+    default: auto
+  - tool: mcp__calendar__calendar_create_draft
+    default: auto
+
+  - tool: calendar_list_calendars
+    default: auto
+  - tool: mcp__calendar__calendar_list_calendars
+    default: auto
+
+  - tool: calendar_list
+    default: auto
+  - tool: mcp__calendar__calendar_list
+    default: auto
+
+  - tool: calendar_freebusy
+    default: auto
+  - tool: mcp__calendar__calendar_freebusy
+    default: auto
+
+  # Tasks
+  - tool: tasks_create
+    default: auto
+  - tool: mcp__tasks__tasks_create
+    default: auto
+
+  - tool: tasks_complete
+    default: auto
+  - tool: mcp__tasks__tasks_complete
+    default: auto
+
+  - tool: tasks_list
+    default: auto
+  - tool: mcp__tasks__tasks_list
+    default: auto
+
+  # Obsidian (mirror-only, solo lectura)
+  - tool: obsidian_search
+    default: auto
+  - tool: mcp__obsidian_reader__obsidian_search
+    default: auto
+
+  - tool: obsidian_read
+    default: auto
+  - tool: mcp__obsidian_reader__obsidian_read
+    default: auto
+
+  - tool: obsidian_list_recent
+    default: auto
+  - tool: mcp__obsidian_reader__obsidian_list_recent
+    default: auto
+
+  # Índice propio de JARVIS
+  - tool: jarvis_search
+    default: auto
+  - tool: mcp__jarvis_index__jarvis_search
+    default: auto
+
+  - tool: jarvis_reindex
+    default: auto
+  - tool: mcp__jarvis_index__jarvis_reindex
+    default: auto
+
+  # Métricas
+  - tool: metrics_record
+    default: auto
+  - tool: mcp__metrics__metrics_record
+    default: auto
+
+  - tool: metrics_list
+    default: auto
+  - tool: mcp__metrics__metrics_list
+    default: auto
+
+  - tool: metrics_query
+    default: auto
+  - tool: mcp__metrics__metrics_query
+    default: auto
+
+  # WhatsApp
+  - tool: send_whatsapp_message
+    default: ask
+
+  # === Default ===
+  - tool: default
+    default: ask

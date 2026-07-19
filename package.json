@@ -1,0 +1,20 @@
+{
+  "name": "jarvis-ea-cos-runtime",
+  "version": "0.1.0",
+  "description": "J.A.R.V.I.S. Executive Assistant / Chief of Staff runtime",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "github:WhiskeySockets/Baileys",
+    "ffmpeg-static": "^5.3.0",
+    "js-yaml": "^5.2.1",
+    "link-preview-js": "^3.2.0",
+    "minimatch": "^10.2.5",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

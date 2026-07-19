@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Runtime data
+sessions/
+sessions.bak.*/
+data/downloads/whatsapp/*
+!data/downloads/whatsapp/.gitkeep
+data/audit/prompts/
+data/audit/responses/
+data/audit/errors/
+jarvis-ea.log
+*.log
+
+# Secrets
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+coverage/

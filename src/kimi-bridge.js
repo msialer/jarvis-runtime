@@ -32,6 +32,10 @@ export async function askKimi(prompt, context = {}) {
   const policies = await loadAllPolicies();
 
   const enrichedPrompt = buildPrompt(prompt, context, rootKimiMd, projectKimiMd, policies);
+  console.log(`Built prompt: ${enrichedPrompt.length.toLocaleString()} chars`);
+  if (enrichedPrompt.length > 100000) {
+    console.warn(`Prompt very large (${enrichedPrompt.length.toLocaleString()} chars}); may hit CLI limits`);
+  }
 
   // Always run Kimi from the project root so it finds .kimi-code/mcp.json,
   // .kimi-code/skills/, and other shared configuration.
@@ -131,13 +135,13 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
 
   if (rootKimiMd) {
     parts.push("--- JARVIS identity and tools ---");
-    parts.push(rootKimiMd.slice(0, 4000));
+    parts.push(rootKimiMd.slice(0, 2500));
     parts.push("--- End JARVIS identity and tools ---");
   }
 
   if (projectKimiMd) {
     parts.push("--- Project instructions ---");
-    parts.push(projectKimiMd.slice(0, 1500));
+    parts.push(projectKimiMd.slice(0, 800));
     parts.push("--- End project instructions ---");
   }
 
@@ -146,7 +150,7 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
     parts.push("\n--- Active JARVIS policies ---");
     for (const policy of relevantPolicies) {
       parts.push(`\n## ${policy.name}`);
-      parts.push(policy.content.slice(0, 800));
+      parts.push(policy.content.slice(0, 400));
     }
     parts.push("\n--- End active JARVIS policies ---");
   }
@@ -168,18 +172,18 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
       parts.push("\n--- Resumen de la conversación anterior ---");
       parts.push(
         typeof context.summary === "string"
-          ? context.summary.slice(0, 800)
+          ? context.summary.slice(0, 400)
           : context.summary
       );
     }
 
     if (context.recentMessages && context.recentMessages.length > 0) {
       const formatted = context.recentMessages
-        .slice(-5)
+        .slice(-3)
         .map((m) => {
           const ts = m.timestamp ? new Date(m.timestamp).toISOString().slice(11, 16) : "";
-          const incoming = (m.incoming || "").slice(0, 300);
-          const outgoing = (m.outgoing || "").slice(0, 300);
+          const incoming = (m.incoming || "").slice(0, 200);
+          const outgoing = (m.outgoing || "").slice(0, 200);
           const lines = [];
           if (incoming) lines.push(`[${ts}] Mauricio: ${incoming}`);
           if (outgoing) lines.push(`[${ts}] Kimi: ${outgoing}`);
@@ -289,13 +293,15 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
       } else if (a.transcriptionError) {
         parts.push(`Error en transcripción: ${a.transcriptionError}`);
       }
-    } else if (a.textContent) {
-      parts.push("Contenido del archivo de texto:");
-      parts.push("```");
-      parts.push(a.textContent);
-      parts.push("```");
-      if (a.textContentTruncated && a.textContentFullPath) {
-        parts.push(`\nEl archivo de texto es largo. Para procesar el contenido completo, leé el archivo: ${a.textContentFullPath}`);
+    } else if (a.textContentPreview !== undefined || a.textContentFullPath) {
+      if (a.textContentPreview) {
+        parts.push("Vista previa del archivo de texto:");
+        parts.push("```");
+        parts.push(a.textContentPreview);
+        parts.push("```");
+      }
+      if (a.textContentFullPath) {
+        parts.push(`\nEl usuario adjuntó un archivo de texto (${(a.size / 1024).toFixed(1)} KB, ~${a.textContentFullLength?.toLocaleString() || "desconocido"} caracteres). Procesá el contenido completo leyendo el archivo: ${a.textContentFullPath}`);
       }
     } else if (a.textContentError) {
       parts.push(`Error al leer el archivo de texto: ${a.textContentError}`);

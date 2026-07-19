@@ -1340,14 +1340,14 @@ async function processAttachment(attachment) {
   ) {
     try {
       const raw = await readFile(attachment.path, "utf8");
-      const MAX_INLINE_CHARS = 4000;
-      attachment.textContent = raw.slice(0, MAX_INLINE_CHARS);
-      attachment.textContentTruncated = raw.length > MAX_INLINE_CHARS;
+      // Keep the inline preview tiny to avoid blowing up the CLI prompt.
+      const MAX_INLINE_CHARS = 500;
+      const PREVIEW_CHARS = 200;
+      attachment.textContentPreview = raw.slice(0, PREVIEW_CHARS);
+      attachment.textContentTruncated = raw.length > PREVIEW_CHARS;
       attachment.textContentFullPath = attachment.path;
-      if (attachment.textContentTruncated) {
-        attachment.textContent += `\n\n[... archivo truncado: el archivo completo tiene ${raw.length.toLocaleString()} caracteres. Leé el archivo completo en ${attachment.path} ...]`;
-      }
-      console.log(`Read text file ${attachment.path} (${raw.length} chars, inline ${attachment.textContent.length})`);
+      attachment.textContentFullLength = raw.length;
+      console.log(`Read text file ${attachment.path} (${raw.length} chars, preview ${PREVIEW_CHARS})`);
     } catch (err) {
       console.error("Failed to read text attachment:", err.message);
       attachment.textContentError = err.message;

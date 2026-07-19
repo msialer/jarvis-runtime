@@ -294,6 +294,9 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
       parts.push("```");
       parts.push(a.textContent);
       parts.push("```");
+      if (a.textContentTruncated && a.textContentFullPath) {
+        parts.push(`\nEl archivo de texto es largo. Para procesar el contenido completo, leé el archivo: ${a.textContentFullPath}`);
+      }
     } else if (a.textContentError) {
       parts.push(`Error al leer el archivo de texto: ${a.textContentError}`);
     } else if (a.extracted) {

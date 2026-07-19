@@ -1333,6 +1333,26 @@ async function processAttachment(attachment) {
     return attachment;
   }
 
+  // Read plain text files so Kimi can use their content directly.
+  if (
+    attachment.type === "document" &&
+    (attachment.mimetype === "text/plain" || attachment.mimetype === "text/markdown")
+  ) {
+    try {
+      const raw = await readFile(attachment.path, "utf8");
+      // Limit to avoid blowing up the prompt.
+      attachment.textContent = raw.slice(0, 50000);
+      if (raw.length > 50000) {
+        attachment.textContent += "\n\n[... archivo truncado: más de 50,000 caracteres ...]";
+      }
+      console.log(`Read text file ${attachment.path} (${raw.length} chars)`);
+    } catch (err) {
+      console.error("Failed to read text attachment:", err.message);
+      attachment.textContentError = err.message;
+    }
+    return attachment;
+  }
+
   return attachment;
 }
 

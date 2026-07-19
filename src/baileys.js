@@ -322,6 +322,7 @@ export async function startBaileys(onMessage, options = {}) {
         msg.message?.extendedTextMessage?.text ||
         msg.message?.imageMessage?.caption ||
         msg.message?.videoMessage?.caption ||
+        msg.message?.documentMessage?.caption ||
         "";
 
       if (!canonicalAuthorJid) continue;
@@ -344,10 +345,13 @@ export async function startBaileys(onMessage, options = {}) {
 
       let attachment = null;
       if (hasMedia) {
+        console.log(
+          `Detected media message: ${contentType} from ${canonicalAuthorJid} in ${isGroup ? "group " : ""}${chatJid}`
+        );
         try {
           attachment = await saveAttachment(sock, msg, logger);
           console.log(
-            `Attachment from ${canonicalAuthorJid} in ${isGroup ? "group " : ""}${chatJid}: ${attachment.filename} (${attachment.mimetype}, ${(attachment.size / 1024).toFixed(1)} KB)`
+            `Attachment saved from ${canonicalAuthorJid} in ${isGroup ? "group " : ""}${chatJid}: ${attachment.filename} (${attachment.mimetype}, ${(attachment.size / 1024).toFixed(1)} KB)`
           );
         } catch (err) {
           console.error("Failed to download attachment:", err.message);

@@ -289,6 +289,13 @@ export function buildPrompt(userPrompt, context, rootKimiMd = "", projectKimiMd 
       } else if (a.transcriptionError) {
         parts.push(`Error en transcripción: ${a.transcriptionError}`);
       }
+    } else if (a.textContent) {
+      parts.push("Contenido del archivo de texto:");
+      parts.push("```");
+      parts.push(a.textContent);
+      parts.push("```");
+    } else if (a.textContentError) {
+      parts.push(`Error al leer el archivo de texto: ${a.textContentError}`);
     } else if (a.extracted) {
       parts.push(`Archivo comprimido extraído en: ${a.extracted.path}`);
       parts.push(`Tipo de archivo: ${a.extracted.type}`);

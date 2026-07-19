@@ -128,11 +128,19 @@ function extensionFromMimetype(mimetype) {
   return map[mimetype] || "";
 }
 
+function getMediaObject(msg, contentType) {
+  if (!msg.message || !contentType) return null;
+  if (contentType === "documentWithCaptionMessage") {
+    return msg.message.documentWithCaptionMessage?.message?.documentMessage;
+  }
+  return msg.message[contentType];
+}
+
 async function saveAttachment(sock, msg, logger) {
   const contentType = getContentType(msg.message);
   if (!contentType) return null;
 
-  const media = msg.message[contentType];
+  const media = getMediaObject(msg, contentType);
   if (!media || typeof media !== "object") return null;
 
   const mimetype = media.mimetype || "application/octet-stream";
@@ -186,6 +194,7 @@ async function saveAttachment(sock, msg, logger) {
 
   await writeFile(filePath, buffer);
 
+  const mediaType = contentType === "documentWithCaptionMessage" ? "document" : contentType.replace("Message", "").toLowerCase();
   return {
     path: filePath,
     filename: finalName,
@@ -193,7 +202,7 @@ async function saveAttachment(sock, msg, logger) {
     mimetype,
     size: buffer.length,
     caption: media.caption || "",
-    type: contentType.replace("Message", "").toLowerCase(), // image, video, document, audio, ptt
+    type: mediaType, // image, video, document, audio, ptt
   };
 }
 
@@ -333,6 +342,7 @@ export async function startBaileys(onMessage, options = {}) {
         contentType === "imageMessage" ||
         contentType === "videoMessage" ||
         contentType === "documentMessage" ||
+        contentType === "documentWithCaptionMessage" ||
         contentType === "audioMessage" ||
         contentType === "pttMessage";
 
@@ -342,6 +352,7 @@ export async function startBaileys(onMessage, options = {}) {
         msg.message?.imageMessage?.caption ||
         msg.message?.videoMessage?.caption ||
         msg.message?.documentMessage?.caption ||
+        msg.message?.documentWithCaptionMessage?.message?.documentMessage?.caption ||
         "";
 
       if (!canonicalAuthorJid) {
